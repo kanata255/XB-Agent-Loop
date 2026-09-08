@@ -21,8 +21,6 @@ WORKDIR = Path.cwd()
 # ═══════════════════════════════════════════════════════════
 #  NEW in s02: 4 个新工具
 # ═══════════════════════════════════════════════════════════
-
-# 路径安全校验
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
