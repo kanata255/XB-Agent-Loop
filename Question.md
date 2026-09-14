@@ -1,0 +1,12 @@
+### 实现Agent Loop中的问题记录
+
+#### 问题1：在Agent Loop中，如果要编辑其他磁盘的文件，在触发第二道闸门后，工具在执行tool_use和safe_path的时候还是报错了？
+> 问题定位： permission.py 说"越界写经过批准就允许"，但 tool_use.py 的 safe_path 说"越界永远不行"。批准的那一步没有把"这个路径已授权"的信息传下去，所以执行层依然拦截。
+> 解决方案： 在run_write、run_edit 两个tool_use中，safe_path已经不需要了，在agent执行到write和edit这里的时候，在permission里面会进行权限校验，用户在输入Y同意之后，
+下一步使用run_write和run_edit的时候已经不需要再对safe_path进行判断，直接删除safe_path的判断
+
+
+### 问题2： 在进行跨磁盘文件编写的时候，应该出触发第二道跨文件编辑门禁，但是在实际执行过程中，门禁未触发
+> 问题定位：本质上是 Agent 的“工具选择策略”问题，有些模型在训练数据里见惯了“用 shell 解决一切”，会更偏向 bash，有些模型被对齐成“结构化工具优先”，就更偏向 write_tool，或者
+更具上下文来进行选择
+> 解决方案：在规则判断里面添加对bash命令修改文件的判断

@@ -23,6 +23,21 @@ def check_deny_list(command: str) -> str | None:
 # 闸门 2：规则匹配——描述"什么时候需要问用户"。每条规则指定工具和检查条件。
 WORKDIR = Path.cwd()
 
+
+def _is_file_edit(command: str) -> bool:
+    """判断 bash 命令是否会写文件：输出重定向(> / >>) 或 sed -i / tee。
+
+    重定向目标若以 & 开头（如 2>&1、>&2）是文件描述符重定向，不视为写文件。
+    """
+    if "sed -i" in command or "tee " in command:
+        return True
+    for op in (">>", ">"):
+        idx = command.find(op)
+        if idx != -1 and not command[idx + len(op):].strip().startswith("&"):
+            return True
+    return False
+
+
 PERMISSION_RULES = [
     {
         "tools": ["write_file", "edit_file"],
@@ -34,9 +49,15 @@ PERMISSION_RULES = [
     {
         "tools": ["bash"],
         "check": lambda args: any(
-            kw in args.get("command", "") for kw in ["rm ", "> /etc/", "chmod 777"]
+            #  [删除文件或目录、修改文件权限]
+            kw in args.get("command", "") for kw in ["rm ","> /etc/", "chmod 777"]
         ),
         "message": "Potentially destructive command",
+    },
+    {
+        "tools": ["bash"],
+        "check": lambda args: _is_file_edit(args.get("command", "")),
+        "message": "Editing files via bash",
     },
 ]
 

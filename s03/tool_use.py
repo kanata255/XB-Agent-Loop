@@ -24,7 +24,10 @@ WORKDIR = Path.cwd()
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
-        raise ValueError(f"Path escapes workspace: {p}")
+        print(f"\n⚠  read_file 越界：{path}")
+        choice = input("   允许读取工作区之外的文件吗? [y/N] ").strip().lower()
+        if choice not in ("y", "yes"):
+            raise ValueError(f"Permission denied: {p}")
     return path
 
 
@@ -58,15 +61,19 @@ def run_read(path, limit=None):
 
 
 def run_write(path, content):
-    safe_path(path).write_text(content)
+    # 写操作不走 safe_path 的 workspace 限制：越界写已由 permission.py 的闸门 2+3 把关，
+    # 用户批准后允许落到 workspace 外。这里直接按给定路径解析并写入。
+    Path(path).resolve().write_text(content)
     return f"Wrote {len(content)} bytes to {path}"
 
 
 def run_edit(path, old_text, new_text):
-    text = safe_path(path).read_text()
+    # 与 run_write 同理：写操作不受 workspace 限制（闸门已把关）。
+    target = Path(path).resolve()
+    text = target.read_text()
     if old_text not in text:
         return "Error: text not found"
-    safe_path(path).write_text(text.replace(old_text, new_text, 1))
+    target.write_text(text.replace(old_text, new_text, 1))
     return f"Edited {path}"
 
 

@@ -93,7 +93,10 @@ def agent_loop(messages: list):
                     )
                     continue
                 handler = TOOL_HANDLERS.get(block.name)
-                output = handler(**block.input) if handler else f"Unknown: {block.name}"
+                try:
+                    output = handler(**block.input) if handler else f"Unknown: {block.name}"
+                except Exception as e:
+                    output = f"Error: {e}"
                 print(f"print2：====> {str(output[:200])}")
                 results.append(
                     {
