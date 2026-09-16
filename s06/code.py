@@ -38,14 +38,16 @@ try:
     readline.parse_and_bind("set convert-meta off")
 except ImportError:
     pass
-from anthropic import Anthropic
+from pathlib import Path
 from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
+from anthropic import Anthropic
 from tool_use import TOOLS, TOOL_HANDLERS
 from hooks import trigger_hooks
-from pathlib import Path
 
 WORKDIR = Path.cwd()
-load_dotenv(override=True)
 if os.getenv("ANTHROPIC_BASE_URL"):
     os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
 
@@ -57,6 +59,7 @@ SYSTEM = (
     f"You are a coding agent at {WORKDIR}. "
     "Before starting any multi-step task, use todo_write to plan your steps. "
     "Update status as you go."
+    "For complex sub-problems, use the task tool to spawn a subagent."
 )
 
 rounds_since_todo = 0
@@ -127,12 +130,12 @@ def agent_loop(messages: list):
 
 # ── Entry point ──────────────────────────────────────────
 if __name__ == "__main__":
-    print("s5: TodoWrite")
+    print("s06: subagent")
     print("输入问题，回车发送。输入 q 退出。\n")
     history = []
     while True:
         try:
-            query = input("\033[36ms05 >> \033[0m")
+            query = input("\033[36ms06 >> \033[0m")
         except (EOFError, KeyboardInterrupt):
             break
         # 退出agent Loop
