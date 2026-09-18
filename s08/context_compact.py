@@ -12,6 +12,32 @@
     调用 LLM ──报 prompt_too_long──> L5 reactive_compact（重试1次）
 
 tool_use 和对应的 tool_result 必须同时存在或同时删除。如果你把中间剪掉，只留下 tool_result 而丢了它对应的 tool_use（或反之），API 会直接报错
+
+
+
+------------------------------------------测试结果----------------------------------------------------------------------------
+有上下文压碎
+==========================================
+Token 用量统计
+==========================================
+LLM 调用次数 : 8
+输入 tokens  : 10068
+输出 tokens  : 1983
+缓存读取 tokens : 13312
+总计 tokens  : 12051
+==========================================
+
+无压缩
+==========================================
+Token 用量统计
+==========================================
+LLM 调用次数 : 7
+输入 tokens  : 20379
+输出 tokens  : 1929
+缓存读取 tokens : 64512
+总计 tokens  : 22308
+==========================================
+------------------------------------------测试结果----------------------------------------------------------------------------
 // 第 1 条：assistant 发出工具调用请求
 	{
 	  "role": "assistant",
@@ -32,6 +58,7 @@ tool_use 和对应的 tool_result 必须同时存在或同时删除。如果你�
 from pathlib import Path
 import json, time ,os
 from anthropic import Anthropic
+import token_usage
 MODEL = os.environ["MODEL_ID"]
 client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
 
@@ -191,6 +218,7 @@ def summarize_history(messages):
               "Preserve: 1. current goal, 2. key findings/decisions, 3. files read/changed, "
               "4. remaining work, 5. user constraints.\nBe compact but concrete.\n\n" + conversation)
     response = client.messages.create(model=MODEL, messages=[{"role": "user", "content": prompt}], max_tokens=2000)
+    token_usage.record(response)
     return "\n".join(
         getattr(block, "text", "")
         for block in response.content

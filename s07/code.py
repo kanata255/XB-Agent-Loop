@@ -9,6 +9,7 @@ WORKDIR = Path.cwd()
 from tool_use import TOOLS, TOOL_HANDLERS
 from hooks import trigger_hooks
 from load_skill import SYSTEM as SKILLS_SYSTEM
+import token_usage
 client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
 MODEL = os.environ["MODEL_ID"]
 
@@ -62,6 +63,7 @@ def agent_loop(messages: list):
             tools=TOOLS,
             max_tokens=8000,
         )
+        token_usage.record(response)
         # 将 assistant 的回复追加到历史，供下次迭代使用
         messages.append({"role": "assistant", "content": response.content})
         # 如果 LLM 没有调用任何工具，说明它已经给出了最终答案，循环结束
@@ -113,7 +115,7 @@ if __name__ == "__main__":
     history = []
     while True:
         try:
-            query = input("\033[36ms06 >> \033[0m")
+            query = input("\033[36ms07 >> \033[0m")
         except (EOFError, KeyboardInterrupt):
             break
         # 退出agent Loop
@@ -131,4 +133,7 @@ if __name__ == "__main__":
             for block in response_content:
                 if getattr(block, "type", None) == "text":
                     print(f"final====>{block.text}")
+        # 每次会话结束：统计本次消耗的 token 并重置计数，供下次会话重新累计
+        token_usage.print_usage()
+        token_usage.reset()
         print()

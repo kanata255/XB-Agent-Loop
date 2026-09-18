@@ -6,6 +6,7 @@ import os
 from anthropic import Anthropic
 from tool_use import run_read,run_bash,run_write,run_edit,run_glob
 from hooks import trigger_hooks
+import token_usage
 
 client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
 MODEL = os.environ["MODEL_ID"]
@@ -52,6 +53,7 @@ def spawn_subagent(description: str) -> str:
             model=MODEL, system=SUB_SYSTEM,
             messages=messages, tools=SUB_TOOLS, max_tokens=8000,
         )
+        token_usage.record(response)
         messages.append({"role": "assistant", "content": response.content})
         if response.stop_reason != "tool_use":
             break

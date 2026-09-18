@@ -12,6 +12,7 @@ from load_skill import SYSTEM as SKILLS_SYSTEM
 client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
 MODEL = os.environ["MODEL_ID"]
 from context_compact import snip_compact,micro_compact,tool_result_budget,reactive_compact,estimate_size,CONTEXT_LIMIT,compact_history
+import token_usage
 
 if sys.platform == "win32":
     os.environ.setdefault("PYTHONUTF8", "1")
@@ -69,7 +70,6 @@ def agent_loop(messages: list):
             })
             rounds_since_todo = 0
         # s08 L4执行，文件落盘，调用LLM返回总结
-        print(f"message:字符长度：{estimate_size(messages)}字符信息：====》{messages}")
         if estimate_size(messages) > CONTEXT_LIMIT:
             print("[L4:->auto compact]")
             messages[:] = compact_history(messages)
@@ -86,6 +86,7 @@ def agent_loop(messages: list):
             )
             # 接口调用没报错置为0
             reactive_retries = 0
+            token_usage.record(response)
         except Exception as e:
             if ("prompt_too_long" in str(e).lower() or "too many tokens" in str(e).lower()) and reactive_retries < MAX_REACTIVE_RETRIES:
                 print("[reactive compact]")
@@ -158,12 +159,12 @@ def agent_loop(messages: list):
 
 # ── Entry point ──────────────────────────────────────────
 if __name__ == "__main__":
-    print("s07: skills")
+    print("s08: 上下文压缩")
     print("输入问题，回车发送。输入 q 退出。\n")
     history = []
     while True:
         try:
-            query = input("\033[36ms06 >> \033[0m")
+            query = input("\033[36ms08 >> \033[0m")
         except (EOFError, KeyboardInterrupt):
             break
         # 退出agent Loop
@@ -181,4 +182,7 @@ if __name__ == "__main__":
             for block in response_content:
                 if getattr(block, "type", None) == "text":
                     print(f"final====>{block.text}")
+        # 每次会话结束：统计本次消耗的 token 并重置计数，供下次会话重新累计
+        token_usage.print_usage()
+        token_usage.reset()
         print()
