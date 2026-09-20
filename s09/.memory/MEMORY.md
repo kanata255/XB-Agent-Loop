@@ -1,0 +1,5 @@
+- [user-preference-chinese-comments](user-preference-chinese-comments.md) — 用户希望在文件顶部和函数注释中使用中文
+- [user-preference-tabs-indentation](user-preference-tabs-indentation.md) — User prefers tabs over spaces for indentation
+- [user-preference-test-folder-organization](user-preference-test-folder-organization.md) — Organize test cases under a test folder
+- [user-preference-test-output-at-end](user-preference-test-output-at-end.md) — 生成测试用例时，把测试用例输出（示例输入/输出注释）放在文件末尾
+- [user-preference-test-print-output](user-preference-test-print-output.md) — Preferred print output content during testing
