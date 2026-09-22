@@ -36,7 +36,8 @@ def safe_path(p: str) -> Path:
 
 def run_bash(command: str) -> str:
     """执行 shell 命令并返回输出。"""
-    dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"]
+    dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"
+                 ]
     if any(d in command for d in dangerous):
         return "Error: Dangerous command blocked"
     try:

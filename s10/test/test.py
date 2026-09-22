@@ -1,4 +1,8 @@
-def main():
+"""Example test module."""
+
+
+def main() -> None:
+	"""Run the example test."""
 	print("hello this is an example")
 
 

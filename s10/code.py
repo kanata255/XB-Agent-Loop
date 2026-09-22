@@ -9,8 +9,10 @@ from tool_use import TOOLS, TOOL_HANDLERS
 from hooks import trigger_hooks
 from load_skill import SYSTEM as SKILLS_SYSTEM
 from llm import call_llm
+from prompt import update_context,get_system_prompt
 from context_compact import snip_compact,micro_compact,tool_result_budget,reactive_compact,estimate_size,CONTEXT_LIMIT,compact_history
 import token_usage
+
 
 if sys.platform == "win32":
     os.environ.setdefault("PYTHONUTF8", "1")
@@ -49,15 +51,17 @@ MAX_REACTIVE_RETRIES = 1
 :description agent loop循环
 """
 from memory import load_memories,build_system,extract_memories,consolidate_memories
-def agent_loop(messages: list):
+def agent_loop(messages: list,context:dict):
+    """主循环 — 使用组装的系统提示，而不是硬编码的 SYSTEM."""
+    system = get_system_prompt(context)
     global rounds_since_todo
-    global SYSTEM
+    # global SYSTEM
     reactive_retries = 0
     # s09: 根据最近对话加载相关记忆
     memories_content = load_memories(messages)
     memory_turn = len(messages) - 1 if messages and isinstance(messages[-1].get("content"), str) else None
     # s09: 获取构建的记忆索引
-    SYSTEM += build_system()
+    # SYSTEM += build_system()
     while True:
         # s09: 保存压缩前快照以准确提取内存
         pre_compress = [m if isinstance(m, dict) else {"role": m.get("role",""),
@@ -93,7 +97,7 @@ def agent_loop(messages: list):
             # 调用 LLM，传入当前对话历史和工具定义
             response = call_llm(
                 request_messages,
-                system=SYSTEM,
+                system=system,
                 tools=TOOLS,
                 max_tokens=8000,
             )
@@ -142,6 +146,7 @@ def agent_loop(messages: list):
                 break  # 结束当前回合，用压缩的上下文重新开始
             # s04 调用工具前调用hook拦截【工具权限判断】
             blocked = trigger_hooks("PreToolUse", block)
+            # 将工具执行结果作为 user 消息追加回历史，LLM 可据此继续推理
             if blocked:
                 results.append({
                     "type": "tool_result",
@@ -168,14 +173,16 @@ def agent_loop(messages: list):
         else:
             # 正常路径：没有调用压缩
             messages.append({"role": "user", "content": results})
-        continue
-        # 将工具执行结果作为 user 消息追加回历史，LLM 可据此继续推理
+        # Re-evaluate context and prompt after each tool round
+        context = update_context(context, messages)
+        system = get_system_prompt(context)
 
 # ── Entry point ──────────────────────────────────────────
 if __name__ == "__main__":
     print("s10: System prompt")
     print("输入问题，回车发送。输入 q 退出。\n")
     history = []
+    context = update_context({},[])
     while True:
         try:
             query = input("\033[36ms10 >> \033[0m")
@@ -187,7 +194,8 @@ if __name__ == "__main__":
         # 用户输入提交后、进入 LLM 前调用Hooks，输入验证，注入上下文
         trigger_hooks("UserPromptSubmit", query)   # ← 进入 LLM 之前
         history.append({"role": "user", "content": query})
-        agent_loop(history)
+        agent_loop(history,context)
+        context = update_context(context, history)
         # agent_loop 结束后，history[-1] 就是 assistant 的最后一条消息。
         # 遍历其 content block 列表，找到 type=="text" 的 block 并打印，这就是 LLM 的最终答案。
         # （中间打印的 print1/print2 是工具执行过程，不是最终答案。）
