@@ -24,6 +24,7 @@ PROMPT_SECTIONS = {
         "You are a coding agent. Act, don't explain. "
         "Before starting any multi-step task, use todo_write to plan your steps "
         "and update status as you go."
+        "For complex sub-problems, use the task tool to spawn a subagent."
     ),
     "tools": f"Available tools: {', '.join(TOOL_HANDLERS.keys())}.",
     "workspace": f"Working directory: {WORKDIR}",

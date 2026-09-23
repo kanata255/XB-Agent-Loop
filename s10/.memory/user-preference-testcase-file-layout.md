@@ -1,7 +1,7 @@
 ---
 name: user-preference-testcase-file-layout
 description: 新建测试用例时的文件组织与注释规范
-type: user
+type: preference
 ---
 
 新建测试用例时：
