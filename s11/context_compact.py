@@ -213,7 +213,7 @@ def summarize_history(messages):
     prompt = ("Summarize this coding-agent conversation so work can continue.\n"
               "Preserve: 1. current goal, 2. key findings/decisions, 3. files read/changed, "
               "4. remaining work, 5. user constraints.\nBe compact but concrete.\n\n" + conversation)
-    response = call_llm([{"role": "user", "content": prompt}], max_tokens=2000)
+    response = call_llm([{"role": "user", "content": prompt}], "context_compact", max_tokens=2000)
     return "\n".join(
         getattr(block, "text", "")
         for block in response.content

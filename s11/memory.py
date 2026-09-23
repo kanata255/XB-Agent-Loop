@@ -207,7 +207,7 @@ def select_relevant_memories(messages: list, max_items: int = 5) -> list[str]:
         f"Memory catalog:\n{catalog}"
     )
     try:
-        response = call_llm([{"role": "user", "content": prompt}], max_tokens=200)
+        response = call_llm([{"role": "user", "content": prompt}], "memory.select", max_tokens=200)
         # 提取返回的text文本
         text = extract_text(response.content).strip()
         # 从响应中提取 JSON 数组
@@ -297,7 +297,7 @@ def extract_memories(messages: list):
         f"Dialogue:\n{dialogue[:4000]}"
     )
     try:
-        response = call_llm([{"role": "user", "content": prompt}], max_tokens=800)
+        response = call_llm([{"role": "user", "content": prompt}], "memory.extract", max_tokens=800)
         text = extract_text(response.content).strip()
         # 从回应中提取 JSON 数组
         match = re.search(r'\[.*\]', text, re.DOTALL)
@@ -349,7 +349,7 @@ def consolidate_memories():
         f"{catalog[:16000]}"
     )
     try:
-        response = call_llm([{"role": "user", "content": prompt}], max_tokens=3000)
+        response = call_llm([{"role": "user", "content": prompt}], "memory.consolidate", max_tokens=3000)
         text = extract_text(response.content).strip()
         match = re.search(r'\[.*\]', text, re.DOTALL)
         if not match:

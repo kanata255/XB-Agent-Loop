@@ -39,7 +39,7 @@ def spawn_subagent(description: str) -> str:
     messages = [{"role": "user", "content": description}]  # fresh context
     for _ in range(SAFE_LIMIT):  # safety limit
         response = call_llm(
-            messages, system=SUB_SYSTEM, tools=SUB_TOOLS, max_tokens=8000,
+            messages, "subagent", system=SUB_SYSTEM, tools=SUB_TOOLS, max_tokens=8000,
         )
         messages.append({"role": "assistant", "content": response.content})
         if response.stop_reason != "tool_use":

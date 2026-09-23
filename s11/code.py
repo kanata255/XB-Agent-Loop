@@ -4,17 +4,13 @@ from dotenv import load_dotenv
 from pathlib import Path
 load_dotenv(override=True)
 WORKDIR = Path.cwd()
-from error_recovery import  DEFAULT_MAX_TOKENS,with_retry,RecoveryState,is_prompt_too_long_error,ESCALATED_MAX_TOKENS,MAX_RECOVERY_RETRIES,CONTINUATION_PROMPT,MAX_RECOVERY_RETRIES
+from error_recovery import DEFAULT_MAX_TOKENS, RecoveryState
 from tool_use import TOOLS, TOOL_HANDLERS
 from hooks import trigger_hooks
 from load_skill import SYSTEM as SKILLS_SYSTEM
-from llm import call_llm
+from llm import call_llm_with_recovery, CALL_OK, CALL_RETRY, CALL_FINISH
 from prompt import update_context,get_system_prompt
-from context_compact import snip_compact,micro_compact,tool_result_budget,reactive_compact,estimate_size,CONTEXT_LIMIT,compact_history
-from anthropic import Anthropic, NOT_GIVEN
-client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
-MODEL = os.environ["MODEL_ID"]
-from error_recovery import with_retry
+from context_compact import snip_compact,micro_compact,tool_result_budget,estimate_size,CONTEXT_LIMIT,compact_history
 import token_usage
 
 if sys.platform == "win32":
@@ -47,8 +43,6 @@ SYSTEM = (
 )
 # 最大无操作提示todolist
 rounds_since_todo = 0
-# LLM调用接口报错最大重试次数
-MAX_REACTIVE_RETRIES = 1
 """
 :message  消息队列
 :description agent loop循环
@@ -59,7 +53,6 @@ def agent_loop(messages: list,context:dict):
     system = get_system_prompt(context)
     global rounds_since_todo
     # global SYSTEM
-    reactive_retries = 0
     # s09: 根据最近对话加载相关记忆
     memories_content = load_memories(messages)
     memory_turn = len(messages) - 1 if messages and isinstance(messages[-1].get("content"), str) else None
@@ -99,76 +92,19 @@ def agent_loop(messages: list,context:dict):
                 **messages[memory_turn],
                 "content": memories_content + "\n\n" + messages[memory_turn]["content"],
             }
-        """————————————————————————————————————LLM调用及常规错误判断————————————————————————————————————"""
-        # try:
-        #     # 调用 LLM，传入当前对话历史和工具定义
-        #     response = call_llm(
-        #         request_messages,
-        #         system=system,
-        #         tools=TOOLS,
-        #         max_tokens=8000,
-        #     )
-        #     # 接口调用没报错置为0
-        #     reactive_retries = 0
-        # except Exception as e:
-        #     if ("prompt_too_long" in str(e).lower() or "too many tokens" in str(e).lower()) and reactive_retries < MAX_REACTIVE_RETRIES:
-        #         print("[reactive compact]")
-        #         # 调用报错启用L5应急策略，保留最后5条message 和 摘要
-        #         messages[:] = reactive_compact(messages)
-        #         reactive_retries += 1
-        #         continue
-        #     raise
-        try:
-            # with_retry 处理瞬态瞬态错误重试包装器
-            response = with_retry(
-                lambda mt=max_tokens, mdl=state.current_model:
-                client.messages.create(
-                    model=mdl, system=system, messages=request_messages,
-                    tools=TOOLS, max_tokens=mt),
-                state)
-        # except 异常处理不可重试的报错
-        except Exception as e:
-            # Path 2: prompt太长
-            if is_prompt_too_long_error(e):
-                # 没有被压缩过则进行压缩
-                if not state.has_attempted_reactive_compact:
-                    # 调用报错启用L5应急策略，保留最后5条message 和 摘要
-                    messages[:] = reactive_compact(messages)
-                    state.has_attempted_reactive_compact = True
-                    # 回到while顶部
-                    continue
-                print("  \033[31m[unrecoverable] LLM报错prompt在进行L5级消息压缩后仍然很长\033[0m")
-                messages.append({"role": "assistant", "content": [
-                    {"type": "text",
-                     "text": "[Error] Context too large, cannot continue."}]})
-                return
-            # 不可恢复，退出agent_loop 消息压缩后仍然很长
-            name = type(e).__name__
-            print(f"  \033[31m[unrecoverable] {name}: {str(e)[:100]}\033[0m")
-            messages.append({"role": "assistant", "content": [
-                {"type": "text", "text": f"[Error] {name}: {str(e)[:200]}"}]})
+        # s11: LLM 调用及报错处理已抽到 llm.call_llm_with_recovery
+        status, response, max_tokens = call_llm_with_recovery(
+            messages,
+            request_messages,
+            system=system,
+            tools=TOOLS,
+            state=state,
+            max_tokens=max_tokens,
+        )
+        if status == CALL_RETRY:
+            continue
+        if status == CALL_FINISH:
             return
-        if response.stop_reason == "max_tokens":
-            # 阶段 1: 第一次升级，不 append
-            # 是否升级过最大token
-            if not state.has_escalated:
-                max_tokens = ESCALATED_MAX_TOKENS
-                state.has_escalated = True
-                print(f"  \033[33m[max_tokens] 升级最大token量"
-                      f" {DEFAULT_MAX_TOKENS} -> {ESCALATED_MAX_TOKENS}\033[0m")
-                # 升级token之后，回到顶部，重新进行循环
-                continue
-            # 阶段 2: 已升级过，追加截断输出 + 续写提示
-            messages.append({"role": "assistant", "content": response.content})
-            if state.recovery_count < MAX_RECOVERY_RETRIES:
-                messages.append({"role": "user", "content": CONTINUATION_PROMPT})
-                state.recovery_count += 1
-                print(f"  \033[33m[max_tokens] 升级最大token，继续重试"
-                      f" {state.recovery_count}/{MAX_RECOVERY_RETRIES}\033[0m")
-                continue
-            print("  \033[31m[max_tokens] 恢复次数已达上限\033[0m")
-            return
-        """——————————————————————————————————————————————————————————————————————————————————————————————"""
         # 将 assistant 的回复追加到历史，供下次迭代使用
         messages.append({"role": "assistant", "content": response.content})
         # 如果 LLM 没有调用任何工具，说明它已经给出了最终答案，循环结束
