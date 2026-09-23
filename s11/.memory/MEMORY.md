@@ -1,0 +1,5 @@
+- [project-refactor-s10-test-test-py](project-refactor-s10-test-test-py.md) — Refactor s10/test/test.py with type hints, docstrings, and a main guard
+- [user-preference-completion-phrase](user-preference-completion-phrase.md) — 回答完问题后添加一句'作答完成
+- [user-preference-indentation-tabs](user-preference-indentation-tabs.md) — Use tabs for indentation instead of spaces
+- [user-preference-restate-question](user-preference-restate-question.md) — Restate the user's question and add your understanding after each user message
+- [user-preference-testcase-file-layout](user-preference-testcase-file-layout.md) — 新建测试用例时的文件组织与注释规范

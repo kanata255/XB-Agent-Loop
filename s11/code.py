@@ -1,0 +1,268 @@
+import os
+import sys
+from dotenv import load_dotenv
+from pathlib import Path
+load_dotenv(override=True)
+WORKDIR = Path.cwd()
+from error_recovery import  DEFAULT_MAX_TOKENS,with_retry,RecoveryState,is_prompt_too_long_error,ESCALATED_MAX_TOKENS,MAX_RECOVERY_RETRIES,CONTINUATION_PROMPT,MAX_RECOVERY_RETRIES
+from tool_use import TOOLS, TOOL_HANDLERS
+from hooks import trigger_hooks
+from load_skill import SYSTEM as SKILLS_SYSTEM
+from llm import call_llm
+from prompt import update_context,get_system_prompt
+from context_compact import snip_compact,micro_compact,tool_result_budget,reactive_compact,estimate_size,CONTEXT_LIMIT,compact_history
+from anthropic import Anthropic, NOT_GIVEN
+client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
+MODEL = os.environ["MODEL_ID"]
+from error_recovery import with_retry
+import token_usage
+
+if sys.platform == "win32":
+    os.environ.setdefault("PYTHONUTF8", "1")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdin = open(
+        sys.stdin.fileno(), mode="r", encoding="utf-8", errors="replace", buffering=1
+    )
+try:
+    import readline
+    # macOS 的 libedit 在处理中文输入时有退格问题，这四行修复它
+    readline.parse_and_bind("set bind-tty-special-chars off")
+    readline.parse_and_bind("set input-meta on")
+    readline.parse_and_bind("set output-meta on")
+    readline.parse_and_bind("set convert-meta off")
+except ImportError:
+    pass
+
+if os.getenv("ANTHROPIC_BASE_URL"):
+    os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
+
+# s07: 拼接 load_skill 构建的 skills SYSTEM，让主 agent 感知可用技能
+SYSTEM = (
+    f"You are a coding agent at {WORKDIR}. "
+    "Before starting any multi-step task, use todo_write to plan your steps. "
+    "Update status as you go."
+    "For complex sub-problems, use the task tool to spawn a subagent.\n\n"
+    f"{SKILLS_SYSTEM}"
+)
+# 最大无操作提示todolist
+rounds_since_todo = 0
+# LLM调用接口报错最大重试次数
+MAX_REACTIVE_RETRIES = 1
+"""
+:message  消息队列
+:description agent loop循环
+"""
+from memory import load_memories,build_system,extract_memories,consolidate_memories
+def agent_loop(messages: list,context:dict):
+    """主循环 — 使用组装的系统提示，而不是硬编码的 SYSTEM."""
+    system = get_system_prompt(context)
+    global rounds_since_todo
+    # global SYSTEM
+    reactive_retries = 0
+    # s09: 根据最近对话加载相关记忆
+    memories_content = load_memories(messages)
+    memory_turn = len(messages) - 1 if messages and isinstance(messages[-1].get("content"), str) else None
+    # s09: 获取构建的记忆索引
+    # SYSTEM += build_system()
+    # 设置默认最大token
+    max_tokens = DEFAULT_MAX_TOKENS
+    state = RecoveryState()
+    while True:
+        # s09: 保存压缩前快照以准确提取内存
+        pre_compress = [m if isinstance(m, dict) else {"role": m.get("role",""),
+                                                       "content": str(m.get("content",""))} for m in messages]
+        # s08 先进行最大文件落盘 -> 掐头去尾保留中间的数据替换成占位符 ->  压缩
+        # L3
+        messages[:] = tool_result_budget(messages)
+        # L1
+        messages[:] = snip_compact(messages)
+        # L2
+        messages[:] = micro_compact(messages)
+        # s05 如果无操作循环进行了3次，更新模型的todolist，注入提醒
+        if rounds_since_todo >= 3 and messages:
+            messages.append({
+                "role": "user",
+                "content": "<reminder>Update your todos.</reminder>"
+            })
+            rounds_since_todo = 0
+        # s08 L4执行，文件落盘，调用LLM返回总结
+        if estimate_size(messages) > CONTEXT_LIMIT:
+            print("[L4:->auto compact]")
+            messages[:] = compact_history(messages)
+        
+        request_messages = messages
+        # 注入最近消息的相关记忆到最后一条数据
+        if memories_content and memory_turn is not None and memory_turn < len(messages):
+            request_messages = messages.copy()
+            request_messages[memory_turn] = {
+                **messages[memory_turn],
+                "content": memories_content + "\n\n" + messages[memory_turn]["content"],
+            }
+        """————————————————————————————————————LLM调用及常规错误判断————————————————————————————————————"""
+        # try:
+        #     # 调用 LLM，传入当前对话历史和工具定义
+        #     response = call_llm(
+        #         request_messages,
+        #         system=system,
+        #         tools=TOOLS,
+        #         max_tokens=8000,
+        #     )
+        #     # 接口调用没报错置为0
+        #     reactive_retries = 0
+        # except Exception as e:
+        #     if ("prompt_too_long" in str(e).lower() or "too many tokens" in str(e).lower()) and reactive_retries < MAX_REACTIVE_RETRIES:
+        #         print("[reactive compact]")
+        #         # 调用报错启用L5应急策略，保留最后5条message 和 摘要
+        #         messages[:] = reactive_compact(messages)
+        #         reactive_retries += 1
+        #         continue
+        #     raise
+        try:
+            # with_retry 处理瞬态瞬态错误重试包装器
+            response = with_retry(
+                lambda mt=max_tokens, mdl=state.current_model:
+                client.messages.create(
+                    model=mdl, system=system, messages=request_messages,
+                    tools=TOOLS, max_tokens=mt),
+                state)
+        # except 异常处理不可重试的报错
+        except Exception as e:
+            # Path 2: prompt太长
+            if is_prompt_too_long_error(e):
+                # 没有被压缩过则进行压缩
+                if not state.has_attempted_reactive_compact:
+                    # 调用报错启用L5应急策略，保留最后5条message 和 摘要
+                    messages[:] = reactive_compact(messages)
+                    state.has_attempted_reactive_compact = True
+                    # 回到while顶部
+                    continue
+                print("  \033[31m[unrecoverable] LLM报错prompt在进行L5级消息压缩后仍然很长\033[0m")
+                messages.append({"role": "assistant", "content": [
+                    {"type": "text",
+                     "text": "[Error] Context too large, cannot continue."}]})
+                return
+            # 不可恢复，退出agent_loop 消息压缩后仍然很长
+            name = type(e).__name__
+            print(f"  \033[31m[unrecoverable] {name}: {str(e)[:100]}\033[0m")
+            messages.append({"role": "assistant", "content": [
+                {"type": "text", "text": f"[Error] {name}: {str(e)[:200]}"}]})
+            return
+        if response.stop_reason == "max_tokens":
+            # 阶段 1: 第一次升级，不 append
+            # 是否升级过最大token
+            if not state.has_escalated:
+                max_tokens = ESCALATED_MAX_TOKENS
+                state.has_escalated = True
+                print(f"  \033[33m[max_tokens] 升级最大token量"
+                      f" {DEFAULT_MAX_TOKENS} -> {ESCALATED_MAX_TOKENS}\033[0m")
+                # 升级token之后，回到顶部，重新进行循环
+                continue
+            # 阶段 2: 已升级过，追加截断输出 + 续写提示
+            messages.append({"role": "assistant", "content": response.content})
+            if state.recovery_count < MAX_RECOVERY_RETRIES:
+                messages.append({"role": "user", "content": CONTINUATION_PROMPT})
+                state.recovery_count += 1
+                print(f"  \033[33m[max_tokens] 升级最大token，继续重试"
+                      f" {state.recovery_count}/{MAX_RECOVERY_RETRIES}\033[0m")
+                continue
+            print("  \033[31m[max_tokens] 恢复次数已达上限\033[0m")
+            return
+        """——————————————————————————————————————————————————————————————————————————————————————————————"""
+        # 将 assistant 的回复追加到历史，供下次迭代使用
+        messages.append({"role": "assistant", "content": response.content})
+        # 如果 LLM 没有调用任何工具，说明它已经给出了最终答案，循环结束
+        if response.stop_reason != "tool_use":
+            # s09: 从压缩前快照提取以保持完整精度，写入新的记忆
+            extract_memories(pre_compress)
+            # s09：整理记忆
+            consolidate_memories()
+            force = trigger_hooks("Stop", messages)   # ← 退出之前
+            if force:
+                # hook returned a message → inject it and continue
+                messages.append({"role": "user", "content": force})
+                continue
+            return
+        # 模型调用一次后累加
+        rounds_since_todo += 1
+        # 遍历 LLM 返回的所有 block，执行 tool_use 类型的调用
+        results = []
+        for block in response.content:
+            if block.type != "tool_use": continue
+            print(f"\033[33m> block.name {block.name}\033[0m")
+            if block.name == "compact":
+                messages[:] = compact_history(messages)
+                results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": "[Compacted. Conversation history has been summarized.]"
+                })
+                messages.append({
+                    "role": "user",
+                    "content": results
+                })
+                break  # 结束当前回合，用压缩的上下文重新开始
+            # s04 调用工具前调用hook拦截【工具权限判断】
+            blocked = trigger_hooks("PreToolUse", block)
+            # 将工具执行结果作为 user 消息追加回历史，LLM 可据此继续推理
+            if blocked:
+                results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": str(blocked)
+                })
+                continue
+            handler = TOOL_HANDLERS.get(block.name)
+            try:
+                output = handler(**block.input) if handler else f"Unknown: {block.name}"
+            except Exception as e:
+                output = f"Error: {e}"
+            # 	工具执行后调用
+            trigger_hooks("PostToolUse", block, output)  # s04: post hook
+            # s05: 当调用 todo_write 时重置提醒计数器
+            if block.name == "todo_write": rounds_since_todo = 0
+            results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": output,
+                }
+            )
+        else:
+            # 正常路径：没有调用压缩
+            messages.append({"role": "user", "content": results})
+        # Re-evaluate context and prompt after each tool round
+        context = update_context(context, messages)
+        system = get_system_prompt(context)
+
+# ── Entry point ──────────────────────────────────────────
+if __name__ == "__main__":
+    print("s11: error_recovery")
+    print("输入问题，回车发送。输入 q 退出。\n")
+    history = []
+    context = update_context({},[])
+    while True:
+        try:
+            query = input("\033[36ms11 >> \033[0m")
+        except (EOFError, KeyboardInterrupt):
+            break
+        # 退出agent Loop
+        if query.strip().lower() in ("q", "exit", ""):
+            break
+        # 用户输入提交后、进入 LLM 前调用Hooks，输入验证，注入上下文
+        trigger_hooks("UserPromptSubmit", query)   # ← 进入 LLM 之前
+        history.append({"role": "user", "content": query})
+        agent_loop(history,context)
+        context = update_context(context, history)
+        # agent_loop 结束后，history[-1] 就是 assistant 的最后一条消息。
+        # 遍历其 content block 列表，找到 type=="text" 的 block 并打印，这就是 LLM 的最终答案。
+        # （中间打印的 print1/print2 是工具执行过程，不是最终答案。）
+        response_content = history[-1]["content"]
+        if isinstance(response_content, list):
+            for block in response_content:
+                if getattr(block, "type", None) == "text":
+                    print(f"final====>{block.text}")
+        # 每次会话结束：统计本次消耗的 token 并重置计数，供下次会话重新累计
+        token_usage.print_usage()
+        token_usage.reset()
+        print()
