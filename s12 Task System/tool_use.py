@@ -36,8 +36,7 @@ def safe_path(p: str) -> Path:
 
 def run_bash(command: str) -> str:
     """执行 shell 命令并返回输出。"""
-    dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"
-                 ]
+    dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"]
     if any(d in command for d in dangerous):
         return "Error: Dangerous command blocked"
     try:
@@ -145,6 +144,63 @@ def _normalize_todos(todos):
     return todos, None
 
 
+# task tool
+from task_system import create_task, list_tasks, get_task, claim_task, complete_task
+
+
+def run_create_task(subject: str, description: str = "",
+                    blockedBy: list[str] | None = None) -> str:
+    # 创建任务
+    task = create_task(subject, description, blockedBy)
+    deps = f" (blockedBy: {', '.join(blockedBy)})" if blockedBy else ""
+    print(f"  \033[34m[create] {task.subject}{deps}\033[0m")
+    # 作为 tool_result 返回给模型
+    return f"Created {task.id}: {task.subject}{deps}"
+
+
+def run_list_tasks() -> str:
+    # 拿到时间排序的任务list
+    tasks = list_tasks()
+    if not tasks:
+        return "No tasks. Use create_task to add some."
+    lines = []
+    for t in tasks:
+        icon = {
+            "pending": "○",
+            "in_progress": "●",
+            "completed": "✓"
+        }.get(t.status, "?")  # 兜底未知状态
+        # 获取任务依赖项
+        deps = f" (blockedBy: {', '.join(t.blockedBy)})" if t.blockedBy else ""
+        # 获取任务owner
+        owner = f" [{t.owner}]" if t.owner else ""
+        # 注入list 作为tool_result返回结果
+        lines.append(f"  {icon} {t.id}: {t.subject} "
+                    f"[{t.status}]{owner}{deps}")
+    return "\n".join(lines)
+
+
+def run_get_task(task_id: str) -> str:
+    """
+    :param task_id:
+    :return: Task
+    """
+    try:
+        return get_task(task_id)
+    except FileNotFoundError:
+        return f"Error: Task {task_id} not found"
+
+
+def run_claim_task(task_id: str) -> str:
+    # 单 agent 场景的简化。多 agent 时这里应该由调用方传 owner。
+    return claim_task(task_id, owner="agent")
+
+
+def run_complete_task(task_id: str) -> str:
+    # 传入id完成任务
+    return complete_task(task_id)
+
+
 from subagent import spawn_subagent
 from load_skill import load_skill
 
@@ -157,6 +213,12 @@ TOOL_HANDLERS = {
     "todo_write": run_todo_write,
     "task": spawn_subagent,
     "load_skill": load_skill,
+    # task_system
+    "create_task": run_create_task,
+    "list_tasks": run_list_tasks,
+    "get_task": run_get_task,
+    "claim_task": run_claim_task,
+    "complete_task": run_complete_task,
 }
 
 # ── Tool definitions ──────────────────────────────────────
@@ -265,6 +327,62 @@ TOOLS = [
             "properties": {
                 "focus": {"type": "string"}
             }
+        }
+    },
+    # s12 task system
+    {
+        "name": "create_task",
+        "description": "Create a new task with optional blockedBy dependencies.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "subject": {"type": "string"},
+                "description": {"type": "string"},
+                "blockedBy": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                }
+            },
+            "required": ["subject"]
+        }
+    },
+    {
+        "name": "list_tasks",
+        "description": "List all tasks with status, owner, and dependencies.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "get_task",
+        "description": "Get full details of a specific task by ID.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"}
+            },
+            "required": ["task_id"]
+        }
+    },
+    {
+        "name": "claim_task",
+        "description": "Claim a pending task. Sets owner, changes status to in_progress.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"}
+            },
+            "required": ["task_id"]
+        }
+    },
+    {
+        "name": "complete_task", "description": "Complete an in-progress task. Reports unblocked downstream tasks.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}},
+            "required": ["task_id"]
         }
     },
 ]

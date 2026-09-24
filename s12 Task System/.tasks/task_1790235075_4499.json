@@ -1,0 +1,10 @@
+{
+  "id": "task_1790235075_4499",
+  "subject": "create API endpoints",
+  "description": "Implement API endpoints based on the database schema.",
+  "status": "pending",
+  "owner": null,
+  "blockedBy": [
+    "task_1790235071_4638"
+  ]
+}
