@@ -106,7 +106,7 @@ L1— 掐头去尾（snip_compact）
 # L1: snipCompact — 掐头去尾，只保留开头3条和末尾47条数据，中间的[snipped N messages] 占位
 def snip_compact(messages, max_messages=50):
     if len(messages) <= max_messages: return messages
-    print("【L1】=》 掐头去尾，中间的用占位符替代")
+    print("【L1】 掐头去尾，中间的用占位符替代")
     keep_head, keep_tail = 3, max_messages - 3
     head_end, tail_start = keep_head, len(messages) - keep_tail
     # 头部保护边界，如果头部最后一条消息是请求调用工具，则需要保留后面的工具返回结果，头部保留就需要变长
@@ -143,7 +143,7 @@ def collect_tool_results(messages):
 def micro_compact(messages):
     tool_results = collect_tool_results(messages)
     if len(tool_results) <= KEEP_RECENT: return messages   # 如果总共只有 ≤3 个工具结果，全部保留，直接返回。
-    print("【L2】=》旧工具调用结果替换成占位符")
+    print("【L2】 旧工具调用结果替换成占位符")
     for _, _, block in tool_results[:-KEEP_RECENT]:  # 只保留最近KEEP_RECENT条完整工具调用结果，其他的进入循环判断，如果内容的字符长度>120，就替换（阈值 120 非常小，意味着几乎任何实质性的工具结果都会被替换（一个文件名列表都轻松超过 120 字符）。）
         if len(block.get("content", "")) > 120:
             block["content"] = "[Earlier tool result compacted. Re-run if needed.]"   # 告诉模型"这里曾经有个工具结果，被压缩了
@@ -176,9 +176,8 @@ def tool_result_budget(messages, max_bytes=20000):
     if not last or last.get("role") != "user" or not isinstance(last.get("content"), list): return messages   # messages 为空 → 直接返回 / 最后一条不是 user（工具结果一定以 user 返回）→ 不处理 / content 不是列表（纯文本消息）→ 不处理
     blocks = [(i, b) for i, b in enumerate(last["content"]) if isinstance(b, dict) and b.get("type") == "tool_result"]  # 获取最后一条消息里所有 tool_result 块
     total = sum(len(str(b.get("content", ""))) for _, b in blocks) # 计算所有content的总长度
-    print(f"【L3】 文件大小：{total} Bytes")
     if total <= max_bytes: return messages
-    print(f"【L3】=》大文件落盘开始落盘")
+    print(f"【L3】 大文件落盘开始落盘")
     ranked = sorted(blocks, key=lambda p: len(str(p[1].get("content", ""))), reverse=True)  # 按体积从大到小排序
     # 优先搬走最大的，目标是用最少的落盘次数把总量降到预算内。
     for _, block in ranked:

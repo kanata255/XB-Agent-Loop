@@ -55,7 +55,6 @@ def agent_loop(messages: list,context:dict):
     # global SYSTEM
     # s09: 根据最近对话加载相关记忆
     memories_content = load_memories(messages)
-    memory_turn = len(messages) - 1 if messages and isinstance(messages[-1].get("content"), str) else None
     # s09: 获取构建的记忆索引
     # SYSTEM += build_system()
     # 设置默认最大token
@@ -86,7 +85,13 @@ def agent_loop(messages: list,context:dict):
         
         request_messages = messages
         # 注入最近消息的相关记忆到最后一条数据
-        if memories_content and memory_turn is not None and memory_turn < len(messages):
+        memory_turn = None
+        for i in range(len(messages) - 1, -1, -1):
+            if isinstance(messages[i].get("content"), str):
+                memory_turn = i
+                break
+        if memories_content and memory_turn is not None:
+            print("[memories] 加载最近记忆")
             request_messages = messages.copy()
             request_messages[memory_turn] = {
                 **messages[memory_turn],
