@@ -151,7 +151,10 @@ from task_system import create_task, list_tasks, get_task, claim_task, complete_
 def run_create_task(subject: str, description: str = "",
                     blockedBy: list[str] | None = None) -> str:
     # 创建任务
-    task = create_task(subject, description, blockedBy)
+    try:
+        task = create_task(subject, description, blockedBy)
+    except ValueError as e:
+        return f"Error: {e}"
     deps = f" (blockedBy: {', '.join(blockedBy)})" if blockedBy else ""
     print(f"  \033[34m[create] {task.subject}{deps}\033[0m")
     # 作为 tool_result 返回给模型

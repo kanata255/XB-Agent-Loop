@@ -37,6 +37,48 @@ def get_task(task_id: str) -> str:
     task = load_task(task_id)
     return json.dumps(asdict(task), indent=2)
 
+def _load_all_tasks() -> dict[str, Task]:
+    """加载全部任务为 {id: Task}，损坏/缺失文件静默跳过。"""
+    tasks = {}
+    for p in TASKS_DIR.glob("task_*.json"):
+        try:
+            t = Task(**json.loads(p.read_text()))
+            tasks[t.id] = t
+        except (json.JSONDecodeError, TypeError, KeyError):
+            continue
+    return tasks
+
+
+def detect_cycle(task_id: str, extra: Task | None = None) -> list[str] | None:
+    """沿 blockedBy 边做 DFS，检测从 task_id 出发是否成环。
+
+    返回闭合环上的 id 列表（如 ['A', 'B', 'A']），无环返回 None。
+    extra 用于把尚未落盘的新任务纳入图参与检测。
+    """
+    tasks = _load_all_tasks()
+    if extra is not None:
+        tasks[extra.id] = extra
+    visiting: list[str] = []
+    visited: set[str] = set()
+
+    def dfs(cur: str) -> list[str] | None:
+        if cur in visiting:
+            i = visiting.index(cur)
+            return visiting[i:] + [cur]
+        if cur in visited or cur not in tasks:
+            return None
+        visiting.append(cur)
+        for dep in tasks[cur].blockedBy:
+            cycle = dfs(dep)
+            if cycle:
+                return cycle
+        visiting.pop()
+        visited.add(cur)
+        return None
+
+    return dfs(task_id)
+
+
 def create_task(subject: str, description: str = "",blockedBy: list[str] | None = None) -> Task:
     """
     :description 创建并保存一个任务到文件
@@ -53,6 +95,9 @@ def create_task(subject: str, description: str = "",blockedBy: list[str] | None 
         owner=None,
         blockedBy=blockedBy or [],
     )
+    cycle = detect_cycle(task.id, extra=task)
+    if cycle:
+        raise ValueError(f"circular dependency: {' -> '.join(cycle)}")
     save_task(task)
     return task
 
@@ -76,6 +121,9 @@ def claim_task(task_id: str, owner: str = "agent") -> str:
         return f"Task {task_id} is {task.status}, cannot claim"
     # 依赖项判断
     if not can_start(task_id):
+        cycle = detect_cycle(task_id)
+        if cycle:
+            return f"Error: circular dependency detected: {' -> '.join(cycle)}"
         deps = [d for d in task.blockedBy
                 if not _task_path(d).exists() or load_task(d).status != "completed"]
         return f"Blocked by: {deps}"
